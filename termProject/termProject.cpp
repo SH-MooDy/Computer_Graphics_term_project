@@ -37,32 +37,29 @@ struct Ball {
 // 2. 전역 변수 및 카메라 설정
 // --------------------------------------------------------
 const int WINDOW_WIDTH = 800;
-const int WINDOW_HEIGHT = 400;
+const int WINDOW_HEIGHT = 400; // 2:1 당구대 비율 고정
 const float FRICTION = 0.99f;
 
 std::vector<Ball> balls;
 
-// 카메라 제어 변수 (초기값: 당구대를 비스듬히 내려다보는 시점)
+// 3D 카메라 제어 변수
 float camEyeX = 400.0f;
 float camEyeY = -150.0f;
 float camEyeZ = 500.0f;
-
-// 카메라가 바라보는 중심점 (당구대 정중앙)
 float camCenterX = 400.0f;
 float camCenterY = 200.0f;
 float camCenterZ = 0.0f;
 
-bool isTopView = false; // 탑뷰/3D뷰 전환 플래그
+bool isTopView = true; // 대다수 사용 편의를 위해 탑뷰를 디폴트(true)로 세팅
 
 // --------------------------------------------------------
 // 3. 초기화 및 조명 설정
 // --------------------------------------------------------
 void initLighting() {
-    glEnable(GL_LIGHTING);     // 조명 활성화
-    glEnable(GL_LIGHT0);       // 0번 광원 사용
-    glEnable(GL_COLOR_MATERIAL); // 오브젝트 고유 색상 유지
+    glEnable(GL_LIGHTING);
+    glEnable(GL_LIGHT0);
+    glEnable(GL_COLOR_MATERIAL);
 
-    // 당구대 위쪽에 위치하는 점광원
     GLfloat lightPos[] = { 400.0f, 200.0f, 600.0f, 1.0f };
     GLfloat ambient[] = { 0.3f, 0.3f, 0.3f, 1.0f };
     GLfloat diffuse[] = { 0.8f, 0.8f, 0.8f, 1.0f };
@@ -98,7 +95,7 @@ void initBalls() {
 }
 
 // --------------------------------------------------------
-// 4. 물리 엔진 로직 (기존 충돌 유지)
+// 4. 물리 엔진 로직 (벽면 충돌 수치와 화면 수치 일치)
 // --------------------------------------------------------
 void resolveCollision(Ball& b1, Ball& b2) {
     Vec2 delta = b1.pos - b2.pos;
@@ -136,7 +133,7 @@ void updatePhysics(int value) {
 
         balls[i].pos.x += balls[i].vel.x; balls[i].pos.y += balls[i].vel.y;
 
-        // 벽면 충돌
+        // 윈도우 경계(0, WINDOW_WIDTH, WINDOW_HEIGHT)를 벽면 충돌 기준으로 적용
         if (balls[i].pos.x - balls[i].radius < 0) { balls[i].pos.x = balls[i].radius; balls[i].vel.x = -balls[i].vel.x; }
         else if (balls[i].pos.x + balls[i].radius > WINDOW_WIDTH) { balls[i].pos.x = WINDOW_WIDTH - balls[i].radius; balls[i].vel.x = -balls[i].vel.x; }
         if (balls[i].pos.y - balls[i].radius < 0) { balls[i].pos.y = balls[i].radius; balls[i].vel.y = -balls[i].vel.y; }
@@ -153,40 +150,60 @@ void updatePhysics(int value) {
 }
 
 // --------------------------------------------------------
-// 5. 3D 렌더링 및 카메라 변환
+// 5. 핵심 수정: 디스플레이 함수 내 투영행렬 동적 제어
 // --------------------------------------------------------
 void display() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glLoadIdentity();
 
-    // 카메라 뷰 설정
+    // 현재 윈도우의 실시간 해상도 획득
+    int w = glutGet(GLUT_WINDOW_WIDTH);
+    int h = glutGet(GLUT_WINDOW_HEIGHT);
+
+    // [Step 1] 시점 모드에 따른 투영 행렬(Projection) 설정
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
     if (isTopView) {
-        // 수직 정방향 탑뷰 (Z축 위에서 정중앙을 내려다봄)
-        gluLookAt(400.0f, 200.0f, 600.0f, 400.0f, 200.0f, 0.0f, 0.0f, 1.0f, 0.0f);
+        // ★ 핵심: 직교 투영을 사용하여 당구대 좌표계를 화면 전체 뷰포트에 강제 밀착시킴
+        // 이 연산 덕분에 윈도우의 4면 테두리가 좌표상의 (0,0) ~ (WINDOW_WIDTH, WINDOW_HEIGHT)와 일치하게 됨
+        glOrtho(0.0, WINDOW_WIDTH, 0.0, WINDOW_HEIGHT, -100.0, 100.0);
     }
     else {
-        // 사용자가 제어하는 3D 원근 카메라 시점
+        // 3D 카메라 뷰일 때는 기존 원근 투영 활용
+        gluPerspective(45.0, (double)w / (double)h, 10.0, 2000.0);
+    }
+
+    // [Step 2] 모델뷰 행렬(ModelView) 설정
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    if (isTopView) {
+        // 탑뷰일 때는 2D 스크린 공간 좌표계를 그대로 쓰므로 별도의 gluLookAt 카메라 이동이 필요 없음
+    }
+    else {
+        // 3D 카메라 시점 배치
         gluLookAt(camEyeX, camEyeY, camEyeZ, camCenterX, camCenterY, camCenterZ, 0.0f, 0.0f, 1.0f);
     }
 
-    // [1] 3D 당구대 바닥 렌더링
-    glDisable(GL_LIGHTING); // 바닥은 단순 색상 지정을 위해 조명 잠시 오프
+    // [Step 3] 렌더링 시작
+    // 당구대 바닥 그리기
+    glDisable(GL_LIGHTING); // 탑뷰에서 깔끔한 단색 처리를 위해 조명 오프
     glColor3f(0.0f, 0.4f, 0.15f);
     glBegin(GL_QUADS);
-    glVertex3f(0.0f, 0.0f, -1.0f);
-    glVertex3f(WINDOW_WIDTH, 0.0f, -1.0f);
-    glVertex3f(WINDOW_WIDTH, WINDOW_HEIGHT, -1.0f);
-    glVertex3f(0.0f, WINDOW_HEIGHT, -1.0f);
+    glVertex3f(0.0f, 0.0f, 0.0f);
+    glVertex3f(WINDOW_WIDTH, 0.0f, 0.0f);
+    glVertex3f(WINDOW_WIDTH, WINDOW_HEIGHT, 0.0f);
+    glVertex3f(0.0f, WINDOW_HEIGHT, 0.0f);
     glEnd();
-    glEnable(GL_LIGHTING);
 
-    // [2] 3D 입체 공 렌더링
+    // 3D 뷰 모드일 때만 음영 입체감을 주기 위해 조명 재활성화
+    if (!isTopView) glEnable(GL_LIGHTING);
+
+    // 당구공 그리기
     for (size_t i = 0; i < balls.size(); i++) {
         glPushMatrix();
-        // 공의 2D 평면 위치(X, Y)를 3D 공간에 매핑 (Z축은 반지름만큼 띄움)
-        glTranslatef(balls[i].pos.x, balls[i].pos.y, balls[i].radius);
+        // 탑뷰일 때는 Z축 튀어나옴 없이 완벽한 평면 원으로 투영되도록 보정
+        glTranslatef(balls[i].pos.x, balls[i].pos.y, isTopView ? 0.0f : balls[i].radius);
         glColor3f(balls[i].r, balls[i].g, balls[i].b);
-        glutSolidSphere(balls[i].radius, 32, 32); // 입체 구체 그리기
+        glutSolidSphere(balls[i].radius, 32, 32);
         glPopMatrix();
     }
 
@@ -195,59 +212,55 @@ void display() {
 
 void reshape(int w, int h) {
     glViewport(0, 0, w, h);
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    // 3차원 원근 투영 정의 (시야각 45도)
-    gluPerspective(45.0, (double)w / (double)h, 10.0, 2000.0);
-    glMatrixMode(GL_MODELVIEW);
+    // 투영 행렬은 display()에서 실시간 제어하므로 여기서는 뷰포트 크기만 갱신합니다.
 }
 
 // --------------------------------------------------------
-// 6. 사용자 입력 처리 (카메라 제어 및 타격)
+// 6. 사용자 입력 처리
 // --------------------------------------------------------
 void keyboard(unsigned char key, int x, int y) {
     float speed = 15.0f;
     switch (key) {
     case ' ': // 공 타격
-        balls[0].vel.x = 22.0f;
-        balls[0].vel.y = 4.0f;
+        balls[0].vel.x = 23.0f;
+        balls[0].vel.y = 3.5f;
         break;
-    case 'v': case 'V': // 'V' 키로 탑뷰 / 3D 카메라뷰 전환
+    case 'v': case 'V': // 'V' 키를 누르면 탑뷰 <-> 3D뷰 완벽 전환
         isTopView = !isTopView;
         break;
-        // 카메라 높낮이 제어
-    case 'w': case 'W': camEyeZ += speed; break;
-    case 's': case 'S': camEyeZ -= speed; break;
+    case 'w': case 'W': if (!isTopView) camEyeZ += speed; break;
+    case 's': case 'S': if (!isTopView) camEyeZ -= speed; break;
     }
     glutPostRedisplay();
 }
 
 void specialKeys(int key, int x, int y) {
     float speed = 15.0f;
-    // 방향키를 이용한 카메라 평면 위치 이동
-    switch (key) {
-    case GLUT_KEY_UP:    camEyeY += speed; break;
-    case GLUT_KEY_DOWN:  camEyeY -= speed; break;
-    case GLUT_KEY_LEFT:  camEyeX -= speed; break;
-    case GLUT_KEY_RIGHT: camEyeX += speed; break;
+    if (!isTopView) {
+        switch (key) {
+        case GLUT_KEY_UP:    camEyeY += speed; break;
+        case GLUT_KEY_DOWN:  camEyeY -= speed; break;
+        case GLUT_KEY_LEFT:  camEyeX -= speed; break;
+        case GLUT_KEY_RIGHT: camEyeX += speed; break;
+        }
+        glutPostRedisplay();
     }
-    glutPostRedisplay();
 }
 
 int main(int argc, char** argv) {
     glutInit(&argc, argv);
-    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH); // 3D를 위한 깊이 버퍼(DEPTH) 추가
-    glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
-    glutCreateWindow("3D Billiard Game - Interactive Camera View");
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
+    glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT); // 800x400 당구대 비율로 최초 윈도우창 생성
+    glutCreateWindow("3D Billiard - Top View 4 Sides Match");
 
-    glEnable(GL_DEPTH_TEST); // 은면 제거 기능 활성화
+    glEnable(GL_DEPTH_TEST);
     initBalls();
     initLighting();
 
     glutDisplayFunc(display);
     glutReshapeFunc(reshape);
     glutKeyboardFunc(keyboard);
-    glutSpecialFunc(specialKeys); // 방향키 입력을 위한 콜백
+    glutSpecialFunc(specialKeys);
     glutTimerFunc(16, updatePhysics, 0);
 
     glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
