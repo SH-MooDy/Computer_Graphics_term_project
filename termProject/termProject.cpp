@@ -231,69 +231,106 @@ void display() {
 void reshape(int w, int h) { glViewport(0, 0, w, h); }
 
 // --------------------------------------------------------
-// 6. 사용자 입력 처리 (큐대 전용 조작 추가)
+// 6. 사용자 입력 처리 (키보드 일반 키)
 // --------------------------------------------------------
 void keyboard(unsigned char key, int x, int y) {
     if (key == 'v' || key == 'V') isTopView = !isTopView;
 
+    // 1. 큐대 조작 (공이 멈춰있을 때만 작동)
     if (isCueVisible) {
         switch (key) {
-            // [조준 각도] A/D 키로 좌우 회전
         case 'a': case 'A': cueAngle += 3.0f; break;
         case 'd': case 'D': cueAngle -= 3.0f; break;
-
-            // [파워 조절] W/S 키로 큐대 당기기 / 밀기
         case 'w': case 'W': if (cuePower < 30.0f) cuePower += 1.5f; break;
         case 's': case 'S': if (cuePower > 2.0f) cuePower -= 1.5f; break;
-
-            // [당점 조절] I/K/J/L 키로 공의 타격 부위 미세 조절
         case 'j': case 'J': if (hitOffsetX > -1.0f) hitOffsetX -= 0.1f; break;
         case 'l': case 'L': if (hitOffsetX < 1.0f) hitOffsetX += 0.1f; break;
         case 'i': case 'I': if (hitOffsetY < 1.0f) hitOffsetY += 0.1f; break;
         case 'k': case 'K': if (hitOffsetY > -1.0f) hitOffsetY -= 0.1f; break;
-
-            // [타격 실행] 스페이스바
         case ' ':
-            // 1. 조준 각도를 라디안으로 변환
             float rad = cueAngle * 3.141592f / 180.0f;
-
-            // 2. 당점에 따른 미세 움직임 보정 (Simplified Physics)
-            // 좌우 당점(hitOffsetX)을 주면 공이 미세하게 휘어 나가는 스쿼트(Squirt) 현상 시뮬레이션
             float actualAngle = rad + (hitOffsetX * 0.15f);
-
-            // 상하 당점(hitOffsetY)을 주면 굴러가는 속도가 미세하게 가속/감속됨
             float actualForce = cuePower * (1.0f + (hitOffsetY * 0.2f));
 
-            // 3. 수구(하얀 공)에 최종 속도 적용
             balls[0].vel.x = cos(actualAngle) * actualForce;
             balls[0].vel.y = sin(actualAngle) * actualForce;
 
-            // 4. 파워 및 당점 초기화
             cuePower = 5.0f;
             hitOffsetX = 0.0f;
             hitOffsetY = 0.0f;
             break;
         }
     }
+
+    // 2. 카메라 줌 인/아웃 (3D 뷰일 때만 작동)
+    if (!isTopView) {
+        float zoomSpeed = 25.0f;
+
+        // 카메라에서 당구대 중심을 향하는 3D 방향 벡터 계산
+        float dx = camCenterX - camEyeX;
+        float dy = camCenterY - camEyeY;
+        float dz = camCenterZ - camEyeZ;
+
+        // 현재 카메라와 중심점 사이의 실제 3D 직선 거리 계산
+        float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+        switch (key) {
+        case '+': case '=': // 줌 인 (시선을 따라 앞으로 직진)
+            if (dist > 100.0f) { // 너무 뚫고 들어가지 않도록 제한
+                camEyeX += (dx / dist) * zoomSpeed;
+                camEyeY += (dy / dist) * zoomSpeed;
+                camEyeZ += (dz / dist) * zoomSpeed;
+            }
+            break;
+
+        case '-': case '_': // 줌 아웃 (시선을 따라 뒤로 후진)
+            if (dist < 2000.0f) { // 너무 멀어지지 않도록 제한
+                camEyeX -= (dx / dist) * zoomSpeed;
+                camEyeY -= (dy / dist) * zoomSpeed;
+                camEyeZ -= (dz / dist) * zoomSpeed;
+            }
+            break;
+        }
+    }
+
     glutPostRedisplay();
 }
 
 // --------------------------------------------------------
-// 6. 사용자 입력 처리 (특수 키 - 방향키)
+// 6. 사용자 입력 처리 (특수 키 - 궤도 회전 카메라)
 // --------------------------------------------------------
 void specialKeys(int key, int x, int y) {
-    float speed = 15.0f;
+    float zSpeed = 15.0f;     // 높낮이 조절 속도
+    float angleSpeed = 0.05f; // 궤도 회전 속도 (라디안 단위)
 
-    // 3D 뷰 모드일 때만 카메라 방향키 조작 허용
     if (!isTopView) {
-        switch (key) {
-            // 기존 Y축 이동을 제거하고, 기존 W/S의 Z축(높낮이) 조절 기능으로 교체
-        case GLUT_KEY_UP:    camEyeZ += speed; break;
-        case GLUT_KEY_DOWN:  camEyeZ -= speed; break;
+        // 1. 현재 바라보는 중심점(Target)을 기준으로 카메라의 상대 위치 계산
+        float dx = camEyeX - camCenterX;
+        float dy = camEyeY - camCenterY;
+        
+        // 2. 피타고라스 정리와 아크탄젠트로 현재 카메라의 '거리(반지름)'와 '각도' 추출
+        float radius = std::sqrt(dx * dx + dy * dy);
+        float currentAngle = std::atan2(dy, dx);
 
-            // 좌우 이동은 그대로 유지
-        case GLUT_KEY_LEFT:  camEyeX -= speed; break;
-        case GLUT_KEY_RIGHT: camEyeX += speed; break;
+        switch (key) {
+        case GLUT_KEY_UP:    
+            camEyeZ += zSpeed; // 고도 상승
+            break;
+        case GLUT_KEY_DOWN:  
+            camEyeZ -= zSpeed; // 고도 하강
+            break;
+        case GLUT_KEY_LEFT:  
+            // 왼쪽 화살표: 각도를 줄여서 당구대 주위를 시계 방향(왼쪽)으로 공전
+            currentAngle -= angleSpeed; 
+            camEyeX = camCenterX + radius * std::cos(currentAngle);
+            camEyeY = camCenterY + radius * std::sin(currentAngle);
+            break;
+        case GLUT_KEY_RIGHT: 
+            // 오른쪽 화살표: 각도를 늘려서 당구대 주위를 반시계 방향(오른쪽)으로 공전
+            currentAngle += angleSpeed; 
+            camEyeX = camCenterX + radius * std::cos(currentAngle);
+            camEyeY = camCenterY + radius * std::sin(currentAngle);
+            break;
         }
         glutPostRedisplay();
     }
