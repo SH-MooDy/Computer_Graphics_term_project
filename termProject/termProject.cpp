@@ -47,12 +47,14 @@ float camEyeX = 400.0f; float camEyeY = -150.0f; float camEyeZ = 500.0f;
 float camCenterX = 400.0f; float camCenterY = 200.0f; float camCenterZ = 0.0f;
 bool isTopView = true;
 
-// ★ 큐대 제어 변수 추가
+// 큐대 제어 변수 추가
 bool isCueVisible = true;    // 공이 모두 멈췄을 때만 큐대 표시
 float cueAngle = 0.0f;       // 타격 각도 (도 단위)
 float cuePower = 5.0f;       // 타격 힘 (당기는 정도)
 float hitOffsetX = 0.0f;     // 좌우 당점 (-1.0 ~ 1.0)
 float hitOffsetY = 0.0f;     // 상하 당점 (-1.0 ~ 1.0)
+bool isStriking = false;          // 현재 타격 애니메이션 중인지 여부
+float strikeAnimationOffset = 0.0f; // 타격 시 큐대가 이동하는 거리
 
 // --------------------------------------------------------
 // 3. 초기화 및 조명 설정
@@ -119,6 +121,29 @@ void resolveCollision(Ball& b1, Ball& b2) {
 }
 
 void updatePhysics(int value) {
+    // 1. 타격 애니메이션 처리 
+    if (isStriking) {
+        // 프레임마다 큐대가 앞으로 4.0f씩 빠르게 전진
+        strikeAnimationOffset -= 4.0f;
+
+        // 큐대가 공 위치에 도달했을 때 (팔로우 스루 느낌을 위해 -2.0f까지 허용)
+        if (strikeAnimationOffset <= -2.0f) {
+            float rad = cueAngle * 3.141592f / 180.0f;
+            float actualAngle = rad + (hitOffsetX * 0.15f);
+            float actualForce = cuePower * (1.0f + (hitOffsetY * 0.2f));
+
+            // 드디어 공에 힘 적용
+            balls[0].vel.x = cos(actualAngle) * actualForce;
+            balls[0].vel.y = sin(actualAngle) * actualForce;
+
+            // 상태 초기화
+            isStriking = false;
+            cuePower = 5.0f;
+            hitOffsetX = 0.0f;
+            hitOffsetY = 0.0f;
+        }
+    }
+
     bool isAnyMoving = false;
 
     for (size_t i = 0; i < balls.size(); i++) {
@@ -144,7 +169,7 @@ void updatePhysics(int value) {
         }
     }
 
-    // ★ 모든 공이 멈췄을 때만 큐대를 다시 표시
+    // 모든 공이 멈췄을 때만 큐대를 다시 표시
     isCueVisible = !isAnyMoving;
 
     glutPostRedisplay();
@@ -177,7 +202,7 @@ void display() {
     glVertex3f(WINDOW_WIDTH, WINDOW_HEIGHT, 0.0f); glVertex3f(0.0f, WINDOW_HEIGHT, 0.0f);
     glEnd();
 
-    // ★ 큐대 조준선(가이드라인) 그리기
+    // 큐대 조준선(가이드라인) 그리기
     if (isCueVisible) {
         float rad = cueAngle * 3.141592f / 180.0f;
         glColor3f(1.0f, 1.0f, 1.0f);
@@ -198,7 +223,7 @@ void display() {
         glPopMatrix();
     }
 
-    // ★ 큐대 및 당점(마커) 그리기
+    // 큐대 및 당점(마커) 그리기
     if (isCueVisible) {
         glPushMatrix();
         glTranslatef(balls[0].pos.x, balls[0].pos.y, isTopView ? 0.0f : balls[0].radius);
@@ -214,16 +239,25 @@ void display() {
         if (!isTopView) glEnable(GL_LIGHTING);
         glPopMatrix();
 
-        // 2. 큐대 본체 그리기 (당기는 힘에 따라 뒤로 이동)
-        // 기본 거리 + 당기는 힘(cuePower)에 비례해서 멀어짐
-        float pullBackDist = balls[0].radius + 5.0f + (cuePower * 2.0f);
+        // 2. 큐대 본체 그리기 
+        // 기본 여백
+        float pullBackDist = balls[0].radius + 5.0f;
+
+        // 타격 중일 때는 애니메이션 오프셋 사용, 조준 중일 때는 파워 사용
+        if (isStriking) {
+            pullBackDist += strikeAnimationOffset;
+        }
+        else {
+            pullBackDist += (cuePower * 2.0f);
+        }
+
         glTranslatef(-pullBackDist - 75.0f, 0.0f, 0.0f); // 75.0f는 큐대 길이의 절반
 
         glColor3f(0.6f, 0.3f, 0.1f); // 나무색
-        glScalef(150.0f, 3.0f, 3.0f); // 길쭉한 막대기 형태
+        glScalef(150.0f, 3.0f, 3.0f);
         glutSolidCube(1.0f);
         glPopMatrix();
-    }
+    } // if (isCueVisible) 끝부분
 
     glutSwapBuffers();
 }
@@ -248,16 +282,10 @@ void keyboard(unsigned char key, int x, int y) {
         case 'i': case 'I': if (hitOffsetY < 1.0f) hitOffsetY += 0.1f; break;
         case 'k': case 'K': if (hitOffsetY > -1.0f) hitOffsetY -= 0.1f; break;
         case ' ':
-            float rad = cueAngle * 3.141592f / 180.0f;
-            float actualAngle = rad + (hitOffsetX * 0.15f);
-            float actualForce = cuePower * (1.0f + (hitOffsetY * 0.2f));
-
-            balls[0].vel.x = cos(actualAngle) * actualForce;
-            balls[0].vel.y = sin(actualAngle) * actualForce;
-
-            cuePower = 5.0f;
-            hitOffsetX = 0.0f;
-            hitOffsetY = 0.0f;
+            // 스페이스바를 누르면 타격 애니메이션 시작!
+            isStriking = true;
+            // 애니메이션 시작 위치 = 현재 큐대를 뒤로 당긴 만큼의 거리
+            strikeAnimationOffset = cuePower * 2.0f;
             break;
         }
     }
