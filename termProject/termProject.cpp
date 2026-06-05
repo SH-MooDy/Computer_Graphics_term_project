@@ -657,7 +657,7 @@ int main(int argc, char** argv) {
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH); // 더블 버퍼, RGB, 깊이 버퍼 사용
     glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
-    glutCreateWindow("3D Billiard - Flat Markers");
+    glutCreateWindow("202112246_term_project");
 
     glEnable(GL_DEPTH_TEST); // 깊이 테스트 활성화 (원근감 있는 가림 처리)
     initBalls();
