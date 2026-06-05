@@ -34,10 +34,11 @@ struct Ball {
     float mass = 1.0f;
     float r = 1.0f, g = 1.0f, b = 1.0f;
 
-    // ★ 회전(스핀) 관련 변수 추가
-    float spinX = 0.0f;   // 사이드 스핀 (좌/우 당점): 진행방향 수직으로 커브 유발
-    float spinY = 0.0f;   // 탑/백 스핀 (위/아래 당점): 속도 증폭 또는 역회전 유발
-    float rotAngle = 0.0f; // 렌더링용 공 자전 각도
+    float spinX = 0.0f;   // 사이드 스핀
+    float spinY = 0.0f;   // 탑/백 스핀
+    float rotAngle = 0.0f; // 렌더링용 자전 각도
+
+    Vec2 lastDir = Vec2(1.0f, 0.0f); // 멈췄을 때 각도 유지를 위해 방향 기억
 };
 
 // --------------------------------------------------------
@@ -46,7 +47,6 @@ struct Ball {
 const int WINDOW_WIDTH = 800;
 const int WINDOW_HEIGHT = 400;
 const float FRICTION = 0.99f;
-// ★ 스핀 감쇠: 스핀은 속도보다 더 빠르게 소멸
 const float SPIN_FRICTION = 0.97f;
 
 std::vector<Ball> balls;
@@ -60,8 +60,8 @@ bool isTopView = true;
 bool isCueVisible = true;
 float cueAngle = 0.0f;
 float cuePower = 5.0f;
-float hitOffsetX = 0.0f;  // 좌우 당점 (-1 ~ +1): 사이드 스핀
-float hitOffsetY = 0.0f;  // 상하 당점 (-1 ~ +1): 백스핀(-) / 탑스핀(+)
+float hitOffsetX = 0.0f;
+float hitOffsetY = 0.0f;
 bool isStriking = false;
 float strikeAnimationOffset = 0.0f;
 
@@ -131,37 +131,17 @@ void resolveCollision(Ball& b1, Ball& b2) {
         b1.vel = b1.vel + impulse * (1.0f / b1.mass);
         b2.vel = b2.vel - impulse * (1.0f / b2.mass);
 
-        // ★ 충돌 시 b1의 사이드 스핀 일부를 b2에 전달 (당구 마세 효과 근사)
         float spinTransfer = 0.3f;
         b2.spinX += b1.spinX * spinTransfer;
         b1.spinX *= (1.0f - spinTransfer);
     }
 }
 
-// ★ 핵심 함수: 당점에 따른 스핀 초기값 계산 후 공 속도에 적용
-void applyHitSpinPhysics(Ball& ball, float angle_rad, float power,
-    float offsetX, float offsetY) {
-    // 기본 발사 속도
+void applyHitSpinPhysics(Ball& ball, float angle_rad, float power, float offsetX, float offsetY) {
     float vx = cos(angle_rad) * power;
     float vy = sin(angle_rad) * power;
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // [좌/우 당점 → 사이드 스핀]
-    //   offsetX > 0 : 오른쪽 당점 → 우측 커브 (sinX > 0)
-    //   offsetX < 0 : 왼쪽 당점  → 좌측 커브 (sinX < 0)
-    //
-    //   스핀 세기는 당점 오프셋 * 파워에 비례
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     ball.spinX = offsetX * power * 0.4f;
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // [위/아래 당점 → 탑스핀 / 백스핀]
-    //   offsetY > 0 : 위쪽 당점 → 탑스핀 (속도 유지 / 증폭)
-    //   offsetY < 0 : 아래쪽    → 백스핀 (진행방향 반대 회전)
-    //
-    //   spinY > 0 : 탑스핀 → 마찰과 스핀이 같은 방향 → 감속 완화
-    //   spinY < 0 : 백스핀 → 마찰과 스핀이 반대 방향 → 빠른 감속, 역행 가능
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     ball.spinY = offsetY * power * 0.5f;
 
     ball.vel.x = vx;
@@ -169,12 +149,10 @@ void applyHitSpinPhysics(Ball& ball, float angle_rad, float power,
 }
 
 void updatePhysics(int value) {
-    // 1. 타격 애니메이션 처리
     if (isStriking) {
         strikeAnimationOffset -= 4.0f;
         if (strikeAnimationOffset <= -2.0f) {
             float rad = cueAngle * 3.141592f / 180.0f;
-            // ★ 스핀 물리 적용 함수 호출 (기존 단순 각도/힘 보정 대체)
             applyHitSpinPhysics(balls[0], rad, cuePower, hitOffsetX, hitOffsetY);
 
             isStriking = false;
@@ -186,7 +164,6 @@ void updatePhysics(int value) {
 
     bool isAnyMoving = false;
 
-    // 2. 공 이동, 스핀 효과 적용, 벽면 충돌 처리
     for (size_t i = 0; i < balls.size(); i++) {
         Ball& b = balls[i];
 
@@ -194,19 +171,12 @@ void updatePhysics(int value) {
         if (speed > 0.1f) {
             Vec2 dir = b.vel.normalize();
 
-            // ★ [사이드 스핀 효과]
-            //   진행 방향의 수직 벡터에 spinX 크기로 횡방향 힘 추가
-            //   spinX가 클수록 옆으로 휘어지는 커브 발생
             if (std::abs(b.spinX) > 0.01f) {
-                // 진행방향 수직: (-dir.y, dir.x)
                 float curveForce = b.spinX * 0.06f;
                 b.vel.x += (-dir.y) * curveForce;
                 b.vel.y += (dir.x) * curveForce;
             }
 
-            // ★ [탑/백 스핀 효과]
-            //   탑스핀(spinY > 0): 속도 감쇠를 늦춤 (굴러가는 관성)
-            //   백스핀(spinY < 0): 속도에 반대 방향 힘 추가 → 빠른 감속, 역행 가능
             if (std::abs(b.spinY) > 0.01f) {
                 float spinEffect = b.spinY * 0.05f;
                 b.vel.x += dir.x * spinEffect;
@@ -214,13 +184,11 @@ void updatePhysics(int value) {
             }
         }
 
-        // 스핀 자체를 시간에 따라 감쇠 (회전에너지 소산)
         b.spinX *= SPIN_FRICTION;
         b.spinY *= SPIN_FRICTION;
         if (std::abs(b.spinX) < 0.001f) b.spinX = 0.0f;
         if (std::abs(b.spinY) < 0.001f) b.spinY = 0.0f;
 
-        // 속도 감쇠
         b.vel.x *= FRICTION;
         b.vel.y *= FRICTION;
 
@@ -229,36 +197,28 @@ void updatePhysics(int value) {
 
         if (b.vel.length() > 0.1f) isAnyMoving = true;
 
-        // 렌더링용 자전 각도 업데이트
-        b.rotAngle += b.vel.length() * 2.0f;
+        if (b.vel.length() > 0.01f) {
+            b.rotAngle += b.vel.length() * 2.0f;
+            b.lastDir = b.vel.normalize();
+        }
 
         b.pos.x += b.vel.x;
         b.pos.y += b.vel.y;
 
-        // 벽면 충돌
         if (b.pos.x - b.radius < 0) {
-            b.pos.x = b.radius;
-            b.vel.x = -b.vel.x;
-            b.spinX = -b.spinX * 0.7f; // 벽 반사 시 사이드 스핀 방향 반전+감쇠
+            b.pos.x = b.radius; b.vel.x = -b.vel.x; b.spinX = -b.spinX * 0.7f;
         }
         else if (b.pos.x + b.radius > WINDOW_WIDTH) {
-            b.pos.x = WINDOW_WIDTH - b.radius;
-            b.vel.x = -b.vel.x;
-            b.spinX = -b.spinX * 0.7f;
+            b.pos.x = WINDOW_WIDTH - b.radius; b.vel.x = -b.vel.x; b.spinX = -b.spinX * 0.7f;
         }
         if (b.pos.y - b.radius < 0) {
-            b.pos.y = b.radius;
-            b.vel.y = -b.vel.y;
-            b.spinX = -b.spinX * 0.7f;
+            b.pos.y = b.radius; b.vel.y = -b.vel.y; b.spinX = -b.spinX * 0.7f;
         }
         else if (b.pos.y + b.radius > WINDOW_HEIGHT) {
-            b.pos.y = WINDOW_HEIGHT - b.radius;
-            b.vel.y = -b.vel.y;
-            b.spinX = -b.spinX * 0.7f;
+            b.pos.y = WINDOW_HEIGHT - b.radius; b.vel.y = -b.vel.y; b.spinX = -b.spinX * 0.7f;
         }
     }
 
-    // 3. 공 간 충돌 체크
     for (size_t i = 0; i < balls.size(); i++) {
         for (size_t j = i + 1; j < balls.size(); j++) {
             resolveCollision(balls[i], balls[j]);
@@ -266,7 +226,6 @@ void updatePhysics(int value) {
     }
 
     isCueVisible = !isAnyMoving && !isStriking;
-
     if (hudMsgTimer > 0) hudMsgTimer--;
 
     glutPostRedisplay();
@@ -278,7 +237,7 @@ void updatePhysics(int value) {
 // --------------------------------------------------------
 void drawText2D(float x, float y, const char* text) {
     glDisable(GL_LIGHTING);
-    glDisable(GL_DEPTH_TEST); // ★ 추가: UI가 당구대에 파묻히지 않도록 깊이 검사 비활성화
+    glDisable(GL_DEPTH_TEST);
 
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();
@@ -297,13 +256,12 @@ void drawText2D(float x, float y, const char* text) {
     glMatrixMode(GL_MODELVIEW);
     glPopMatrix();
 
-    glEnable(GL_DEPTH_TEST); // ★ 추가: 렌더링 완료 후 깊이 검사 원상복구
+    glEnable(GL_DEPTH_TEST);
 }
 
-// ★ 당점 시각화: 공 단면 원 + 빨간 점
 void drawHitPointIndicator(float screenX, float screenY, float offsetX, float offsetY) {
     glDisable(GL_LIGHTING);
-    glDisable(GL_DEPTH_TEST); // ★ 추가: 깊이 검사 비활성화
+    glDisable(GL_DEPTH_TEST);
 
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();
@@ -319,7 +277,6 @@ void drawHitPointIndicator(float screenX, float screenY, float offsetX, float of
     float cy = screenY;
     float displayR = 22.0f;
 
-    // 배경 원 (공 단면)
     glColor3f(0.85f, 0.85f, 0.85f);
     glBegin(GL_TRIANGLE_FAN);
     glVertex2f(cx, cy);
@@ -329,7 +286,6 @@ void drawHitPointIndicator(float screenX, float screenY, float offsetX, float of
     }
     glEnd();
 
-    // 원 테두리
     glColor3f(0.3f, 0.3f, 0.3f);
     glLineWidth(1.5f);
     glBegin(GL_LINE_LOOP);
@@ -339,7 +295,6 @@ void drawHitPointIndicator(float screenX, float screenY, float offsetX, float of
     }
     glEnd();
 
-    // 십자선
     glColor3f(0.6f, 0.6f, 0.6f);
     glLineWidth(1.0f);
     glBegin(GL_LINES);
@@ -347,7 +302,6 @@ void drawHitPointIndicator(float screenX, float screenY, float offsetX, float of
     glVertex2f(cx, cy - displayR); glVertex2f(cx, cy + displayR);
     glEnd();
 
-    // 당점 빨간 점
     float dotX = cx + offsetX * (displayR * 0.85f);
     float dotY = cy + offsetY * (displayR * 0.85f);
     glColor3f(1.0f, 0.1f, 0.1f);
@@ -363,8 +317,9 @@ void drawHitPointIndicator(float screenX, float screenY, float offsetX, float of
     glMatrixMode(GL_MODELVIEW);
     glPopMatrix();
 
-    glEnable(GL_DEPTH_TEST); // ★ 추가: 렌더링 완료 후 깊이 검사 원상복구
+    glEnable(GL_DEPTH_TEST);
 }
+
 // --------------------------------------------------------
 // 6. 디스플레이
 // --------------------------------------------------------
@@ -391,6 +346,7 @@ void display() {
     glVertex3f(WINDOW_WIDTH, WINDOW_HEIGHT, 0.0f); glVertex3f(0.0f, WINDOW_HEIGHT, 0.0f);
     glEnd();
 
+    // 3D 테이블 구조물
     if (!isTopView) {
         glEnable(GL_LIGHTING);
         glPushMatrix(); glTranslatef(400.0f, 200.0f, -11.0f); glScalef(800.0f, 400.0f, 20.0f);
@@ -410,7 +366,7 @@ void display() {
         glPushMatrix(); glTranslatef(780.0f, 380.0f, legZ); glScalef(30.0f, 30.0f, legH); glutSolidCube(1.0f); glPopMatrix();
     }
 
-    // 조준선
+    // 큐대 조준선
     if (isCueVisible) {
         float rad = cueAngle * 3.141592f / 180.0f;
         glDisable(GL_LIGHTING);
@@ -423,21 +379,43 @@ void display() {
 
     if (!isTopView) glEnable(GL_LIGHTING);
 
-    // 공 렌더링 (스핀 시각화: 자전 회전 적용)
+    // 공 렌더링 및 회전 6점 마커 (납작한 스티커 모양) 적용
     for (size_t i = 0; i < balls.size(); i++) {
         glPushMatrix();
         glTranslatef(balls[i].pos.x, balls[i].pos.y, isTopView ? 0.0f : balls[i].radius);
 
-        // ★ 진행 방향 축으로 자전 (스핀 시각화)
-        float speed = balls[i].vel.length();
-        if (speed > 0.1f) {
-            Vec2 dir = balls[i].vel.normalize();
-            // 진행방향 수직축 기준으로 회전
-            glRotatef(balls[i].rotAngle, -dir.y, dir.x, 0.0f);
-        }
+        glRotatef(balls[i].rotAngle, -balls[i].lastDir.y, balls[i].lastDir.x, 0.0f);
 
+        // 공 본체
         glColor3f(balls[i].r, balls[i].g, balls[i].b);
         glutSolidSphere(balls[i].radius, 32, 32);
+
+        // 공 표면에 붙은 납작한 스티커 형태의 6군데 점
+        glDisable(GL_LIGHTING);
+        glColor3f(0.0f, 0.0f, 0.0f);
+
+        float rad = balls[i].radius;
+        float offset = rad + 0.15f;
+        float mRad = 3.0f;
+
+        float dotParams[6][6] = {
+            { offset, 0, 0,    0.05f, 1.0f, 1.0f },
+            { -offset, 0, 0,   0.05f, 1.0f, 1.0f },
+            { 0, offset, 0,    1.0f, 0.05f, 1.0f },
+            { 0, -offset, 0,   1.0f, 0.05f, 1.0f },
+            { 0, 0, offset,    1.0f, 1.0f, 0.05f },
+            { 0, 0, -offset,   1.0f, 1.0f, 0.05f }
+        };
+
+        for (int j = 0; j < 6; j++) {
+            glPushMatrix();
+            glTranslatef(dotParams[j][0], dotParams[j][1], dotParams[j][2]);
+            glScalef(dotParams[j][3], dotParams[j][4], dotParams[j][5]);
+            glutSolidSphere(mRad, 10, 10);
+            glPopMatrix();
+        }
+        if (!isTopView) glEnable(GL_LIGHTING);
+
         glPopMatrix();
     }
 
@@ -447,7 +425,7 @@ void display() {
         glTranslatef(balls[0].pos.x, balls[0].pos.y, isTopView ? 0.0f : balls[0].radius);
         glRotatef(cueAngle, 0, 0, 1);
 
-        // 당점 표시 빨간 점 (큐 끝)
+        // 당점 표시 빨간 점
         glPushMatrix();
         glTranslatef(-balls[0].radius, hitOffsetX * 10.0f, hitOffsetY * 10.0f);
         glDisable(GL_LIGHTING);
@@ -467,59 +445,33 @@ void display() {
         glPopMatrix();
     }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // ★ HUD: 당점 인디케이터 + 조작 가이드
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // ★ HUD 렌더링 (하단 스핀 설명 텍스트 제거됨)
     if (isCueVisible) {
-        // 당점 인디케이터 (우상단)
         drawHitPointIndicator(w - 50, h - 50, hitOffsetX, hitOffsetY);
 
-        // 레이블
         glColor3f(1.0f, 1.0f, 1.0f);
         drawText2D(w - 90, h - 20, "Hit Point");
 
-        // 스핀 상태 텍스트
         char spinInfo[64];
         if (std::abs(hitOffsetY) < 0.05f && std::abs(hitOffsetX) < 0.05f)
             sprintf(spinInfo, "Center");
-        else if (hitOffsetY > 0.3f)
-            sprintf(spinInfo, "Top Spin");
-        else if (hitOffsetY < -0.3f)
-            sprintf(spinInfo, "Back Spin");
-        else if (hitOffsetX > 0.3f)
-            sprintf(spinInfo, "Right Spin");
-        else if (hitOffsetX < -0.3f)
-            sprintf(spinInfo, "Left Spin");
-        else
-            sprintf(spinInfo, "Mixed");
+        else if (hitOffsetY > 0.3f) sprintf(spinInfo, "Top Spin");
+        else if (hitOffsetY < -0.3f) sprintf(spinInfo, "Back Spin");
+        else if (hitOffsetX > 0.3f) sprintf(spinInfo, "Right Spin");
+        else if (hitOffsetX < -0.3f) sprintf(spinInfo, "Left Spin");
+        else sprintf(spinInfo, "Mixed");
 
         glColor3f(1.0f, 1.0f, 0.2f);
         drawText2D(w - 82, h - 90, spinInfo);
 
-        // 파워 바
         char powerStr[32];
         sprintf(powerStr, "Power: %.0f%%", (cuePower / 30.0f) * 100.0f);
         glColor3f(1.0f, 0.6f, 0.2f);
         drawText2D(10, h - 20, powerStr);
 
-        // 조작 가이드
         glColor3f(0.8f, 0.8f, 0.8f);
         drawText2D(10, h - 38, "A/D: Angle  W/S: Power  J/L: Side Spin  I/K: Top/Back Spin");
         drawText2D(10, h - 52, "SPACE: Shoot  V: View  R: Reset");
-
-        // 스핀 설명
-        if (hitOffsetY > 0.3f) {
-            glColor3f(0.4f, 1.0f, 0.4f);
-            drawText2D(10, 12, "Top Spin: rolls further after impact");
-        }
-        else if (hitOffsetY < -0.3f) {
-            glColor3f(1.0f, 0.4f, 0.4f);
-            drawText2D(10, 12, "Back Spin: stops or reverses after impact");
-        }
-        else if (std::abs(hitOffsetX) > 0.3f) {
-            glColor3f(0.4f, 0.8f, 1.0f);
-            drawText2D(10, 12, "Side Spin: curves the path");
-        }
     }
 
     glutSwapBuffers();
@@ -545,10 +497,8 @@ void keyboard(unsigned char key, int x, int y) {
         case 'd': case 'D': cueAngle -= 3.0f; break;
         case 'w': case 'W': if (cuePower < 30.0f) cuePower += 1.5f; break;
         case 's': case 'S': if (cuePower > 2.0f) cuePower -= 1.5f; break;
-            // ★ J/L: 좌우 당점 (사이드 스핀)
         case 'j': case 'J': if (hitOffsetX > -1.0f) hitOffsetX -= 0.1f; break;
         case 'l': case 'L': if (hitOffsetX < 1.0f) hitOffsetX += 0.1f; break;
-            // ★ I/K: 상하 당점 (탑/백 스핀)
         case 'i': case 'I': if (hitOffsetY < 1.0f) hitOffsetY += 0.1f; break;
         case 'k': case 'K': if (hitOffsetY > -1.0f) hitOffsetY -= 0.1f; break;
         case ' ':
@@ -617,7 +567,7 @@ int main(int argc, char** argv) {
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
     glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
-    glutCreateWindow("3D Billiard - Spin Physics");
+    glutCreateWindow("3D Billiard - Flat Markers");
 
     glEnable(GL_DEPTH_TEST);
     initBalls();
